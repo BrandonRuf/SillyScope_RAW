@@ -8,7 +8,7 @@ import mcphysics as _mp
 try: from . import _visa_tools
 except: _visa_tools = _mp.instruments._visa_tools
 
-_mp._debug_enabled = False
+_mp._debug_enabled = True
 _debug = _mp._debug
 
 class sillyscope_api(_visa_tools.visa_api_base):
@@ -483,6 +483,7 @@ class sillyscope_api(_visa_tools.visa_api_base):
 
             # Ask for the data
             try:
+                s = b''
                 
                 # Calculate memory depth for RAW data read
                 timebase_scale = self.query(':TIMebase:MAIN:SCALe?')
@@ -490,14 +491,25 @@ class sillyscope_api(_visa_tools.visa_api_base):
                 waveform_length = 12*float(timebase_scale)
                 mdepth = int(sampling_rate*waveform_length)
                 
-                # Set the stop point of waveform data reading.
-                self.write(":WAV:STOP %d"%mdepth)
                 
-                # Request the data
-                self.write(':WAV:DATA?')
+                excess = mdepth%250000
+                cycles = int(mdepth/250000)
                 
-                # Read data
-                s = self.read_raw()
+                for j in range(cycles):
+                    self.write(":WAV:START %d"%(250000*j +1))
+                    self.write(":WAV:STOP %d" %(250000*(j+1)))
+                    self.write(":WAV:DATA?")
+                    
+                    a = self.read_raw()
+                    s += a[11:-1]
+                        
+                if(excess != 0):
+                    self.write(":WAV:START %d"%(250000*cycles+1))
+                    self.write(":WAV:STOP  %d"%(250000*cycles+excess))
+                    self.write(":WAV:DATA?")
+                    
+                    a = self.read_raw()
+                    s += a[11:-1]
                 
                 # Get the yreference for proper conversion of BYTE data to volts
                 Yref = int(self.query(':WAV:YREFerence?'))
@@ -506,19 +518,12 @@ class sillyscope_api(_visa_tools.visa_api_base):
             except:
                 print('ERROR: Timeout getting curve.')
                 return empty
-
-            # Get the number of characters describing the number of points
-            n = int(s[1:2].decode())
-
-            # Get the number of points
-            N = int(s[2:2+n].decode())
-            _debug(N)
+            
 
             # Convert it to an array of integers.
             # This hits the rails properly on the DS1074Z, but is one step off from
             # The values reported on the main screen.
-            return _n.float16(_n.frombuffer(s[2+n:2+n+N], _n.uint8))- Yref
-
+            return _n.float16(_n.frombuffer(s, _n.uint8)) - Yref
 
     def set_binary_encoding(self):
         """
