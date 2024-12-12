@@ -483,7 +483,10 @@ class sillyscope_api(_visa_tools.visa_api_base):
 
             # Ask for the data
             try:
-                s = b''
+                s = b'' # Byte string
+                
+                # Maximum number of BYTES that can be transfered from memory at once
+                maxWavePoints = 250000 
                 
                 # Calculate memory depth for RAW data read
                 timebase_scale = self.query(':TIMebase:MAIN:SCALe?')
@@ -491,29 +494,34 @@ class sillyscope_api(_visa_tools.visa_api_base):
                 waveform_length = 12*float(timebase_scale)
                 mdepth = int(sampling_rate*waveform_length)
                 
-                
-                excess = mdepth%250000
-                cycles = int(mdepth/250000)
+                # Calculate number of data requests needed to transfer all the data
+                excess = mdepth%maxWavePoints
+                cycles = int(mdepth/maxWavePoints)
                 
                 for j in range(cycles):
-                    self.write(":WAV:START %d"%(250000*j +1))
-                    self.write(":WAV:STOP %d" %(250000*(j+1)))
+                    self.write(":WAV:START %d"%(maxWavePoints*j +1))
+                    self.write(":WAV:STOP %d" %(maxWavePoints*(j+1)))
                     self.write(":WAV:DATA?")
                     
+                    # Read the data
                     a = self.read_raw()
+                    
+                    # Strip the header and linefeed bytes and concatenate to the main byte string
                     s += a[11:-1]
                         
                 if(excess != 0):
-                    self.write(":WAV:START %d"%(250000*cycles+1))
-                    self.write(":WAV:STOP  %d"%(250000*cycles+excess))
+                    self.write(":WAV:START %d"%(maxWavePoints*cycles+1))
+                    self.write(":WAV:STOP  %d"%(maxWavePoints*cycles+excess))
                     self.write(":WAV:DATA?")
                     
+                    # Read the data
                     a = self.read_raw()
+                    
+                    # Strip the header and linefeed bytes and concatenate to the main byte string
                     s += a[11:-1]
                 
                 # Get the yreference for proper conversion of BYTE data to volts
                 Yref = int(self.query(':WAV:YREFerence?'))
-
 
             except:
                 print('ERROR: Timeout getting curve.')
