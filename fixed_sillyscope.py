@@ -1,3 +1,9 @@
+"""
+Written by Brandon Ruffolo (and based on previous McPhysics Sillyscope, written by Jack Sankey) for the McGill Physics department.
+
+Implements RAW aquisition (waveform data fully read from the scopes' internal memory) on the Rigol Z Oscilloscopes.
+"""
+
 import numpy   as _n
 import time    as _t
 import spinmob as _s
@@ -507,11 +513,11 @@ class sillyscope_api(_visa_tools.visa_api_base):
                 nrequests = int(mdepth/maxWavePoints)
                 remainder = mdepth%maxWavePoints
 
-                for j in range(nrequests):
-                    
+                # Loop to sequentially grab the data from the scope memory
+                for n in range(nrequests):
                     # Set scope memory pointers and request the data
-                    self.write(":WAV:START %d"%(maxWavePoints*j +1))
-                    self.write(":WAV:STOP %d" %(maxWavePoints*(j+1)))
+                    self.write(":WAV:START %d"%(maxWavePoints*n+1))
+                    self.write(":WAV:STOP %d" %(maxWavePoints*(n+1)))
                     self.write(":WAV:DATA?")
                     
                     # Read the data
@@ -658,7 +664,7 @@ class sillyscope(_visa_tools.visa_gui_base):
         # Acquisition settings
         self.settings.add_parameter('Acquire/Iterations',       1,     tip='How many iterations to perform. Set to 0 to keep looping.')
         self.settings.add_parameter('Acquire/Trigger',          True, tip='Halt acquisition and arm / wait for a single trigger.')
-        self.settings.add_parameter('Acquire/Get_Full_Dataset', False, tip='Get the full dataset from the scope .Potentially lots of data.\nTRIGGER SETTING ABOVE MUST BE ENABLED FOR THIS TO WORK.')
+        self.settings.add_parameter('Acquire/Get_Full_Dataset', False, tip='Get the full dataset from the scope. Potentially lots of data.\nTRIGGER SETTING ABOVE MUST BE ENABLED FOR THIS TO WORK.')
         self.settings.add_parameter('Acquire/Get_First_Header', True,  tip='Get the header (calibration) information the first time. Disabling this will return uncalibrated data.')
         self.settings.add_parameter('Acquire/Get_All_Headers',  True,  tip='Get the header (calibration) information EVERY time. Disabling this will use the first header repeatedly.')
         self.settings.add_parameter('Acquire/Discard_Identical',False, tip='Do not continue until the data is different.')
