@@ -62,11 +62,10 @@ class sillyscope_api(_visa_tools.visa_api_base):
         if self.idn[0:9] == 'TEKTRONIX': self.model='TEKTRONIX'
 
         # Need to distinguish 'Rigol Technologies,DS1052E,DS1ET161453620,00.04.01.00.02'
-        # Which is janky and not working. (What is the GD data format??)
         elif self.idn[0:5].upper() == 'RIGOL':
 
             # Get the model string
-            m = self.idn.split(',')[1]
+            m = self.idn.split(',')[1].split(' ')[0]
 
             # Find out if it's a d/e or a z:
             if   m[-1] in ['Z']: self.model='RIGOLZ'
@@ -480,7 +479,7 @@ class sillyscope_api(_visa_tools.visa_api_base):
 
 
         elif self.model in ['RIGOLZ']:
-
+                            
             # Ask for the data
             try:
                 s = b'' # Byte string
@@ -488,37 +487,50 @@ class sillyscope_api(_visa_tools.visa_api_base):
                 # Maximum number of BYTES that can be transfered from memory at once
                 maxWavePoints = 250000 
                 
-                # Calculate memory depth for RAW data read
-                timebase_scale = self.query(':TIMebase:MAIN:SCALe?')
-                sampling_rate  = float(self.query(':ACQuire:SRATe?'))
-                waveform_length = 12*float(timebase_scale)
-                mdepth = int(sampling_rate*waveform_length)
+                # Query the scope mode to figure out how to proceed
+                mode = self.query("WAV:MODE?").strip('\n')
                 
-                # Calculate number of data requests needed to transfer all the data
-                excess = mdepth%maxWavePoints
-                cycles = int(mdepth/maxWavePoints)
+                # NORM mode is simple (the dataset is always 1200 points)
+                if mode == "NORM":
+                    mdepth = 1200
+                # Otherwise calculate parameters for data parsing
+                else:
+                    # Calculate memory depth for RAW data read
+                    timebase_scale = self.query(':TIMebase:MAIN:SCALe?')
+                    sampling_rate  = float(self.query(':ACQuire:SRATe?'))
+                    waveform_length = 12*float(timebase_scale)
+                    mdepth = int(sampling_rate*waveform_length)
                 
-                for j in range(cycles):
+                _debug("Memory Depth %d"%mdepth)
+                
+                # Calculate number of data requests and remainder needed to transfer all the data
+                nrequests = int(mdepth/maxWavePoints)
+                remainder = mdepth%maxWavePoints
+
+                for j in range(nrequests):
+                    
+                    # Set scope memory pointers and request the data
                     self.write(":WAV:START %d"%(maxWavePoints*j +1))
                     self.write(":WAV:STOP %d" %(maxWavePoints*(j+1)))
                     self.write(":WAV:DATA?")
                     
                     # Read the data
-                    a = self.read_raw()
+                    raw_bytes = self.read_raw()
                     
                     # Strip the header and linefeed bytes and concatenate to the main byte string
-                    s += a[11:-1]
+                    s += raw_bytes[11:-1]
                         
-                if(excess != 0):
-                    self.write(":WAV:START %d"%(maxWavePoints*cycles+1))
-                    self.write(":WAV:STOP  %d"%(maxWavePoints*cycles+excess))
+                if(remainder != 0):
+                    # Set scope memory pointers and request the data
+                    self.write(":WAV:START %d"%(maxWavePoints*nrequests+1))
+                    self.write(":WAV:STOP  %d"%(maxWavePoints*nrequests+remainder))
                     self.write(":WAV:DATA?")
                     
                     # Read the data
-                    a = self.read_raw()
+                    raw_bytes = self.read_raw()
                     
                     # Strip the header and linefeed bytes and concatenate to the main byte string
-                    s += a[11:-1]
+                    s += raw_bytes[11:-1]
                 
                 # Get the yreference for proper conversion of BYTE data to volts
                 Yref = int(self.query(':WAV:YREFerence?'))
@@ -527,12 +539,13 @@ class sillyscope_api(_visa_tools.visa_api_base):
                 print('ERROR: Timeout getting curve.')
                 return empty
             
-
             # Convert it to an array of integers.
             # This hits the rails properly on the DS1074Z, but is one step off from
             # The values reported on the main screen.
             return _n.float16(_n.frombuffer(s, _n.uint8)) - Yref
+            
 
+            
     def set_binary_encoding(self):
         """
         Sets up the binary encoding mode for curve transfer.
@@ -547,7 +560,7 @@ class sillyscope_api(_visa_tools.visa_api_base):
             self.write(':WAV:POIN:MODE NORM')
 
         elif self.model in ['RIGOLZ', 'RIGOLB']:
-            self.write(':WAV:MODE RAW')  # Use RAW to access the full memory.
+            self.write(':WAV:MODE NORM')  # Use RAW to access the full memory.
             self.write(':WAV:FORM BYTE') # Use WORD to have two bytes per point.
 
         else:
@@ -644,7 +657,8 @@ class sillyscope(_visa_tools.visa_gui_base):
 
         # Acquisition settings
         self.settings.add_parameter('Acquire/Iterations',       1,     tip='How many iterations to perform. Set to 0 to keep looping.')
-        self.settings.add_parameter('Acquire/Trigger',          False, tip='Halt acquisition and arm / wait for a single trigger.')
+        self.settings.add_parameter('Acquire/Trigger',          True, tip='Halt acquisition and arm / wait for a single trigger.')
+        self.settings.add_parameter('Acquire/Get_Full_Dataset', False, tip='Get the full dataset from the scope .Potentially lots of data.\nTRIGGER SETTING ABOVE MUST BE ENABLED FOR THIS TO WORK.')
         self.settings.add_parameter('Acquire/Get_First_Header', True,  tip='Get the header (calibration) information the first time. Disabling this will return uncalibrated data.')
         self.settings.add_parameter('Acquire/Get_All_Headers',  True,  tip='Get the header (calibration) information EVERY time. Disabling this will use the first header repeatedly.')
         self.settings.add_parameter('Acquire/Discard_Identical',False, tip='Do not continue until the data is different.')
@@ -655,7 +669,8 @@ class sillyscope(_visa_tools.visa_gui_base):
         self.settings.add_parameter('Acquire/RIGOL1000Z/Always_Clear',    True, tip='Clear the scope prior to acquisition even in untriggered mode (prevents duplicates but may slow acquisition).')
 
         # Connect all the signals
-        self.settings.connect_signal_changed('Acquire/Trigger', self._settings_trigger_changed)
+        self.settings.connect_signal_changed('Acquire/Trigger'         , self._settings_trigger_changed)
+        self.settings.connect_signal_changed('Acquire/Get_Full_Dataset',self._settings_fulldataset_changed)
         self.button_acquire.signal_toggled.connect(self._button_acquire_clicked)
         self.button_1.signal_toggled.connect(self.save_gui_settings)
         self.button_2.signal_toggled.connect(self.save_gui_settings)
@@ -730,6 +745,7 @@ class sillyscope(_visa_tools.visa_gui_base):
         Called after a successful disconnect.
         """
         self.button_acquire.disable()
+                
 
     def _settings_trigger_changed(self, *a):
         """
@@ -738,6 +754,15 @@ class sillyscope(_visa_tools.visa_gui_base):
         if self.settings['Acquire/Trigger']:
             self.api.set_mode_single_trigger()
             self.unlock()
+    
+    def _settings_fulldataset_changed(self):
+        """
+        Called when someone clicks the Get_Full_Dataset checkbox.
+        """        
+        if self.settings['Acquire/Get_Full_Dataset']:
+            self.api.write(":WAV:MODE RAW")
+        else:
+            self.api.write(":WAV:MODE NORM")
 
     def _libregexdisp_ctl(self, opposite=False):
         # Yeah, so it's not actualy that well hidden. Congrats. If you
