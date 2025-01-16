@@ -663,16 +663,16 @@ class sillyscope(_visa_tools.visa_gui_base):
 
         # Acquisition settings
         self.settings.add_parameter('Acquire/Iterations',       1,     tip='How many iterations to perform. Set to 0 to keep looping.')
-        self.settings.add_parameter('Acquire/Trigger',          True, tip='Halt acquisition and arm / wait for a single trigger.')
+        self.settings.add_parameter('Acquire/Trigger',          True, tip='Halt acquisition and arm / wait for a single trigger.', readonly=True)
         self.settings.add_parameter('Acquire/Get_Full_Dataset', False, tip='Get the full dataset from the scope. Potentially lots of data.\nTRIGGER SETTING ABOVE MUST BE ENABLED FOR THIS TO WORK.')
         self.settings.add_parameter('Acquire/Get_First_Header', True,  tip='Get the header (calibration) information the first time. Disabling this will return uncalibrated data.')
         self.settings.add_parameter('Acquire/Get_All_Headers',  True,  tip='Get the header (calibration) information EVERY time. Disabling this will use the first header repeatedly.')
         self.settings.add_parameter('Acquire/Discard_Identical',False, tip='Do not continue until the data is different.')
 
         # Device-specific settings
-        self.settings.add_parameter('Acquire/RIGOL1000BDE/Trigger_Delay', 0.05, bounds=(1e-3,10), siPrefix=True, suffix='s', dec=True, tip='How long after "trigger" command to wait before checking status. Some scopes appear to be done for a moment between the trigger command and arming.')
-        self.settings.add_parameter('Acquire/RIGOL1000BDE/Unlock',        True, tip='Unlock the device\'s frong panel after acquisition.')
-        self.settings.add_parameter('Acquire/RIGOL1000Z/Always_Clear',    True, tip='Clear the scope prior to acquisition even in untriggered mode (prevents duplicates but may slow acquisition).')
+        self.settings.add_parameter('Acquire/RIGOL1000Z/Trigger_Delay',   0.5, bounds=(1e-3,10), siPrefix=True, suffix='s', dec=True, tip='How long after "trigger" command to wait before checking status. Some scopes appear to be done for a moment between the trigger command and arming.')
+        self.settings.add_parameter('Acquire/RIGOL1000Z/Run_after_acquire', False, tip='Put the scope back into free running mode when the acquisition is finished.')
+        #self.settings.add_parameter('Acquire/RIGOL1000Z/Always_Clear',    True, tip='Clear the scope prior to acquisition even in untriggered mode (prevents duplicates but may slow acquisition).')
 
         # Connect all the signals
         self.settings.connect_signal_changed('Acquire/Trigger'         , self._settings_trigger_changed)
@@ -759,7 +759,7 @@ class sillyscope(_visa_tools.visa_gui_base):
         """
         if self.settings['Acquire/Trigger']:
             self.api.set_mode_single_trigger()
-            self.unlock()
+            #self.unlock()
     
     def _settings_fulldataset_changed(self):
         """
@@ -795,19 +795,13 @@ class sillyscope(_visa_tools.visa_gui_base):
             _debug('  TEK')
             return not bool(int(self.api.query('ACQ:STATE?')))
 
-        elif self.api.model == 'RIGOLZ':
-            _debug('  RIGOLZ')
 
-            # If the waveforms are empty (we cleared it!)
-            self.get_waveforms(plot=False)
-            if len(self.plot_raw[0]) > 0: return True
-            else:                         return False
+        elif self.api.model in ['RIGOLDE', 'RIGOLB','RIGOLZ']:
+            #_debug('  RIGOLDE/B/Z')
 
-        elif self.api.model in ['RIGOLDE', 'RIGOLB']:
-            _debug('  RIGOLDE/B')
-
-            self.window.sleep(self.settings['Acquire/RIGOL1000BDE/Trigger_Delay'])
+            self.window.sleep(self.settings['Acquire/RIGOL1000Z/Trigger_Delay'])
             s = self.api.query(':TRIG:STAT?').strip()
+            _debug(s)
             return s == 'STOP'
 
     def get_waveforms(self, plot=True):
@@ -920,6 +914,9 @@ class sillyscope(_visa_tools.visa_gui_base):
 
         # If we're triggering, set to single sequence mode
         if self.settings['Acquire/Trigger']: self.api.set_mode_single_trigger()
+        
+        self.trigger_mode = self.api.query("TRIG:SWE?").strip("\n")
+        _debug(self.trigger_mode)
 
     def _acquire_and_plot(self):
         """
@@ -952,19 +949,6 @@ class sillyscope(_visa_tools.visa_gui_base):
             # Tell the user it's done acquiring.
             _debug('  TRIGGERING DONE')
 
-        # For RIGOL scopes, the most reliable / fast way to wait for a trace
-        # is to clear it and keep asking for the waveform.
-
-        # Not triggering but RIGOLZ mode: clear the data first and then wait for data
-        elif self.api.model in ['RIGOLZ']:
-
-            # Clear the scope if we're not in free running mode
-            if self.settings['Acquire/RIGOL1000Z/Always_Clear']:
-                self.api.write(':CLE')
-
-            # Wait for it to complete
-            while not self.acquisition_is_finished() and self.button_acquire.is_checked():
-                self.window.sleep(0.005)
 
         self.button_onair.set_checked(False)
 
@@ -973,11 +957,8 @@ class sillyscope(_visa_tools.visa_gui_base):
 
             _debug('  getting data')
 
-            # The Z RIGOL models best check the status by getting the waveforms
-            # after clearing the scope and seeing if there is data returned.
 
-            # Triggered RIGOLZ scopes already have the data
-            if self.api.model in [None, 'TEKTRONIX', 'RIGOLDE', 'RIGOLB'] or \
+            if self.api.model in [None, 'TEKTRONIX', 'RIGOLDE', 'RIGOLB', 'RIGOLZ'] or \
                not self.settings['Acquire/Trigger']:
 
                    # Query the scope for the data and stuff it into the plotter
@@ -1022,9 +1003,12 @@ class sillyscope(_visa_tools.visa_gui_base):
         """
         # Enable the connect button
         self.button_connect.enable()
+        
+        if self.settings['Acquire/RIGOL1000Z/Run_after_acquire']:
+            self.api.write(":RUN")
 
         # Unlock the RIGOL1000E front panel
-        self.unlock()
+        # self.unlock()
 
     def _button_acquire_clicked(self, *a):
         """
